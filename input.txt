@@ -1,0 +1,7 @@
+var x, y;
+begin
+  if y <> x then
+    write y
+  fi;
+  write x + 1;
+end.

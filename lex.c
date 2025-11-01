@@ -1,34 +1,37 @@
 /*
-  Assignment:
-  lex - Lexical Analyzer for PL/0
+Assignment:
+HW3 - Parser and Code Generator for PL/0
 
-  Author: Ernesto Lugo, Anthony Casseus
+Author: Ernesto Lugo
 
-  Language: C (only)
+Language: C
 
-  To Compile:
+To Compile:
+  Scanner:
     gcc -O2 -std=c11 -o lex lex.c
+  Parser/Code Generator:
+    gcc -O2 -stdc11 -o parsercodegen parsercodegen.c
 
-  To Execute (on Eustis):
-    ./lex <input file>
+To Execute (on Eustis):
+  ./lex <input_file.txt>
+  ./parsercodegen
 
-  where:
-    <input file> is the path to the PL/0 source program
+where:
+  <input_file.txt> is the path to the PL/0 source program
 
-  Notes:
-  -Implement a lexical analyser for the PL/0 language.
-  -The program must detect errors such as
-    -numbers longer than five digits
-    -identifiers longer than eleven characters
-    -invalid characters.
-  -The output format must exactly match the specification.
-  -Tested on Eustis.
+Notes:
+  -lex.c accepts ONE command-line argument (input PL/0 source file)
+  -parsercodegen.c accepts NO command-line arguments
+  -Input filename is hard-coded in parsercodegen.c
+  -Implements recursive-descent parser for PL/0 grammar
+  -Generates PM/0 assembly code (see Appendix A for ISA)
+  -All development and testing performed on Eustis
 
-  Class: COP 3402 - System Software - Fall 2025
+Class: COP3402 - System Software - Fall 2025
 
-  Instructor: Dr.Jie Lin
+Instructor: Dr. Jie Lin
 
-  Due Date: Friday, October 3, 2025 at 11:59 PM ET
+Due Date: Friday, October 31, 2025 at 11:59 PM ET
 */
 
 
@@ -175,8 +178,10 @@ TokenType getSymbolType(char* chs)
     case '<':
       if(chs[1] == '>')
         return neqsym;
-      else
+      else if(chs[1] == '=')
         return leqsym;
+      else
+        return lessym;
 
     case '>':
       if(chs[1] == '=')
@@ -327,21 +332,6 @@ int main(int argc, char** argv)
   }
   /*----- Opening and Verifying File -----*/
 
-
-  /*----- Printing Header -----*/
-  printf("Source Program:\n\n");
-  char printTmp;
-  while((printTmp = fgetc(fp)) != EOF)
-  {
-    printf("%c", printTmp);
-  }
-  rewind(fp);
-
-  printf("\n\nLexeme Table:\n");
-  printf("\nlexeme     token type\n");
-  /*----- Printing Header -----*/
-
-
   /*----- Main Loop -----*/
   char str[512];
   char tokenList[2048];
@@ -350,14 +340,6 @@ int main(int argc, char** argv)
   int numTokens = 0;
   while((type = grabNextToken(fp, str)) != endfilesym)
   {
-    /*----- Lexeme Table Printing -----*/
-    printf("%-10s ", str);
-    if(type == identifiererror) {printf("Identifier too long\n");}
-    else if(type == numbererror) {printf("Number too long\n");}
-    else
-      printf("%d\n", type);
-    /*----- Lexeme Table Printing -----*/
-    
     /*----- Token List Printing -----*/
     if(type != identifiererror && type != numbererror)
     {
@@ -392,12 +374,12 @@ int main(int argc, char** argv)
   tokenList[numTokens] = '\0';
   /*----- Main Loop -----*/
 
-  printf("\nToken List:\n");
-  printf("\n%s\n", tokenList);
+  fclose(fp);
+  FILE* foutput = fopen("token_list.txt", "w");
+  fprintf(foutput, "%s", tokenList);
 
 
   
-
-  fclose(fp);
+  fclose(foutput);
   return 0;
 }
