@@ -1,31 +1,5 @@
 /*
-Assignment:
-HW3 - Parser and Code Generator for PL/0
 
-Language: C
-
-To Compile:
-  Scanner:
-    gcc -O2 -std=c11 -o lex lex.c
-  Parser/Code Generator:
-    gcc -O2 -stdc11 -o parsercodegen parsercodegen.c
-
-To Execute (on Eustis):
-  ./lex <input_file.txt>
-  ./parsercodegen
-
-where:
-  <input_file.txt> is the path to the PL/0 source program
-
-Notes:
-  -lex.c accepts ONE command-line argument (input PL/0 source file)
-  -parsercodegen.c accepts NO command-line arguments
-  -Input filename is hard-coded in parsercodegen.c
-  -Implements recursive-descent parser for PL/0 grammar
-  -Generates PM/0 assembly code (see Appendix A for ISA)
-  -All development and testing performed on Eustis
-
-Due Date: Friday, October 31, 2025 at 11:59 PM ET
 */
 
 #include <stdio.h>
@@ -40,7 +14,7 @@ Due Date: Friday, October 31, 2025 at 11:59 PM ET
 #define MAX_INSTRUCTION_TABLE_SIZE 500 //PAS for HW1 was max 500, so this is overkill if anything
 
 
-typedef enum {
+typedef enum TokenType{
   numbererror = -3,
   identifiererror = -2,
   endfilesym = -1,
@@ -108,15 +82,32 @@ enum Instructions
   EVEN = 11
 };
 
+typedef struct Instruction
+{
+  int op;
+  //l is never used
+  int m;
+}Instruction;
+
 typedef struct Symbol
 {
-  int kind; //const = 1, var = 2
-  char name[12]; //const and var
+  int kind; //const = 1, var = 2, procedure = 3
+  char name[12]; //all
   int val; //const only
-  int level; //const and var = 0 (always)
-  int addr; //var only
-  int mark; //const and var = 0 (default)
+  int level; //all
+  int addr; //var and procedure
+  int mark; //all = 0 (default)
 }Symbol;
+
+enum SymbolEnum
+{
+  Constant = 1,
+  Variable = 2,
+  Procedure = 3,
+
+  Available = 0,
+  Unavailable = 1
+};
 
 typedef struct Token
 {
@@ -125,12 +116,31 @@ typedef struct Token
   char name[12]; //holds name of identifier if identifier
 }Token;
 
-typedef struct Instruction
+typedef enum ErrorCode
 {
-  int op;
-  //l is never used
-  int m;
-}Instruction;
+  PeriodMissing = 1,
+  IdentifierMissing,
+  SymbolPreviouslyDeclared,
+  ConstNotAssigned,
+  ConstNotAssignedInteger,
+  ConstVarDeclarationsNoSemicolon,
+  UndeclaredIdentifier,
+  NonVarAltered,
+  WrongAssignmentSymbol,
+  BeginNoEnd,
+  IfNoThen,
+  ElseNoFi,
+  IfNoElse,
+  WhileNoDo,
+  NoComparison,
+  IncompleteParenthesis,
+  ArithmeticOperationIncomplete,
+  CallOnNonProc,
+  ProcDeclarationNoSemicolon,
+  SkipsymDetected
+}ErrorCode;
+
+
 /*----- Enums, Macros, and Structs -----*/
 
 
@@ -143,8 +153,9 @@ Symbol symbol_table[MAX_SYMBOL_TABLE_SIZE];
 Token token_list[MAX_TOKEN_TABLE_SIZE];
 Instruction instruction_list[MAX_INSTRUCTION_TABLE_SIZE];
 
-int linenumber;
-int tokenindex;
+unsigned linenumber;
+unsigned tokenindex;
+unsigned currentLevel;
 /*----- Globals -----*/
 
 
@@ -170,9 +181,9 @@ void insertSymbol(Symbol _addition)
 void insertConst(int _val, const char* _name)
 {
   Symbol newconst;
-  newconst.kind = 1;
+  newconst.kind = Constant;
   newconst.val = _val;
-  newconst.level = 0;
+  newconst.level = currentLevel;
   newconst.addr = 0;
   newconst.mark = 0;
   strcpy(newconst.name, _name);
@@ -182,16 +193,28 @@ void insertConst(int _val, const char* _name)
 void insertVar(int _addr, const char* _name)
 {
   Symbol newvar;
-  newvar.kind = 2;
+  newvar.kind = Variable;
   newvar.val = 0;
-  newvar.level = 0;
+  newvar.level = currentLevel;
   newvar.addr = _addr;
   newvar.mark = 0;
   strcpy(newvar.name, _name);
   insertSymbol(newvar);
 }
 
-void insertInstruction(int _op, int _m, int _line)
+void insertProc(int _addr, const char* _name)
+{
+  Symbol newproc;
+  newproc.kind = Procedure;
+  newproc.val = 0;
+  newproc.level = currentLevel;
+  newproc.addr = _addr;
+  newproc.mark = 0;
+  strcpy(newproc.name, _name);
+  insertSymbol(newproc);
+}
+
+void insertInstruction(int _op, int _m, unsigned _line)
 {
   Instruction newinstruction;
   newinstruction.op = _op;
@@ -221,48 +244,54 @@ void markSymbol(const char* _name)
   symbol_table[lookupSymbol(_name)].mark = 1;
 }
 
-void printErrorAndHalt(int _error_code)
+void markSymbolI(unsigned _index) //c doesn't have function overloading? tell me again how its 'better' than cpp
+{
+  symbol_table[_index].mark = 1;
+}
+
+void printInstructions();
+void printErrorAndHalt(ErrorCode _error_code)
 {
   FILE* outputfile = fopen("elf.txt", "w");
   char* errcode;
   switch(_error_code)
   {
-    case 1:
+    case PeriodMissing:
       errcode = "Error: program must end with period"; break;
-    case 2:
-      errcode = "Error: const, var, and read keywords must be followed by identifier"; break;
-    case 3:
+    case IdentifierMissing:
+      errcode = "Error: const, var, read, procedure, and call keywords must be followed by identifier"; break;
+    case SymbolPreviouslyDeclared:
       errcode = "Error: symbol name has already been declared"; break;
-    case 4:
+    case ConstNotAssigned:
       errcode = "Error: constants must be assigned with ="; break;
-    case 5:
+    case ConstNotAssignedInteger:
       errcode = "Error: constants must be assigned an integer value"; break;
-    case 6:
+    case ConstVarDeclarationsNoSemicolon:
       errcode = "Error: constant and variable declarations must be followed by a semicolon"; break;
-    case 7:
+    case UndeclaredIdentifier:
       errcode = "Error: undeclared identifier"; break;
-    case 8:
+    case NonVarAltered:
       errcode = "Error: only variable values may be altered"; break;
-    case 9:
+    case WrongAssignmentSymbol:
       errcode = "Error: assignment statements must use :="; break;
-    case 10:
+    case BeginNoEnd:
       errcode = "Error: begin must be followed by end"; break;
-    case 11:
+    case IfNoThen:
       errcode = "Error: if must be followed by then"; break;
-    case 12:
+    case ElseNoFi:
+      errcode = "Error: else must be followed by fi"; break;
+    case IfNoElse:
+      errcode = "Error: if statement must include else clause"; break;
+    case WhileNoDo:
       errcode = "Error: while must be followed by do"; break;
-    case 13:
+    case NoComparison:
       errcode = "Error: condition must contain comparison operator"; break;
-    case 14:
+    case IncompleteParenthesis:
       errcode = "Error: right parenthesis must follow left parenthesis"; break;
-    case 15:
+    case ArithmeticOperationIncomplete:
       errcode = "Error: arithmetic equations must contain operands, parentheses, numbers, or symbols"; break;
-    case 16:
+    case SkipsymDetected:
       errcode = "Error: Scanning error detected by lexer (skipsym present)"; break;
-
-
-    case 17:
-      errcode = "Error: if must be followed by fi"; break;
 
     default:
       errcode = "Error: Undefined error encountered, please give me points still";
@@ -271,6 +300,15 @@ void printErrorAndHalt(int _error_code)
 
   fputs(errcode, outputfile);
   printf("%s\n", errcode);
+  //printInstructions();
+  // if(token_list[tokenindex-1].type == identsym)
+  // {
+  //   printf("%s\n", token_list[tokenindex-1].name);
+  // }
+  // else {
+  //   printf("%d\n", token_list[tokenindex-1].type);
+  // }
+  
 
   fclose(outputfile);
   exit(0);
@@ -347,15 +385,28 @@ void printOP(int _op)
       break;
   } 
 }
+
+void printInstructions()
+{
+    for(int i=0; i<MAX_INSTRUCTION_TABLE_SIZE; ++i)
+  {
+    if(instruction_list[i].op == 0)
+      break;
+
+    printf("%3d", i);
+    printOP(instruction_list[i].op);
+    printf("%5d%5d\n", 0, instruction_list[i].m);
+  }
+}
 /*----- Helper Functions -----*/
 
 /*----- Grammar Checking -----*/
 void isProgram();
-void isBlock();
-void isConstDecl();
-int isVarDecl();
 
-
+void parseBlock();
+void parseConstDecl();
+int parseVarDecl(); //returns num variables declares
+void parseProcDecl();
 void parseStatement();
 void parseCondition();
 void parseExpression();
@@ -364,10 +415,8 @@ void parseFactor();
 
 void isProgram()
 {
-  insertInstruction(JMP, 3, linenumber++);
-  isBlock();
-  if(token_list[tokenindex++].type != periodsym) printErrorAndHalt(1);
-
+  parseBlock();
+  if(token_list[tokenindex++].type != periodsym) printErrorAndHalt(PeriodMissing);
   insertInstruction(SYS, 3, linenumber++);
 
   //mark all symbols as unavailable when done with context
@@ -380,56 +429,60 @@ void isProgram()
   }
 }
 
-void isBlock()
+void parseBlock()
 {
-  int numLocals = 3;
-  isConstDecl();
-  numLocals += isVarDecl();
+
+  parseConstDecl();
+  int numLocals = parseVarDecl();
+
+  int jmpLocaton = linenumber++;
+  parseProcDecl();
+  insertInstruction(JMP, (linenumber)*3, jmpLocaton);
   insertInstruction(INC, numLocals, linenumber++);
 
   parseStatement();
 }
 
-void isConstDecl()
+void parseConstDecl()
 {
 
   if(token_list[tokenindex++].type != constsym) {--tokenindex; return;}  
-  if(token_list[tokenindex].type != identsym) printErrorAndHalt(2);
-  if(lookupSymbol(token_list[tokenindex].name) != -1) printErrorAndHalt(3);
+  if(token_list[tokenindex].type != identsym) printErrorAndHalt(IdentifierMissing);
+  if(lookupSymbol(token_list[tokenindex].name) != -1) printErrorAndHalt(SymbolPreviouslyDeclared);
   int tmp = tokenindex;
   tokenindex++;
 
-  if(token_list[tokenindex++].type != eqsym) printErrorAndHalt(4);
-  if(token_list[tokenindex].type != numbersym) printErrorAndHalt(5);
+  if(token_list[tokenindex++].type != eqsym) printErrorAndHalt(ConstNotAssigned);
+  if(token_list[tokenindex].type != numbersym) printErrorAndHalt(ConstNotAssignedInteger);
 
   insertConst(token_list[tokenindex].value, token_list[tmp].name);
   tokenindex++;
   
   while(token_list[tokenindex].type == commasym)
   {
-    if(token_list[++tokenindex].type != identsym) printErrorAndHalt(2);
-    if(lookupSymbol(token_list[tokenindex].name) != -1) printErrorAndHalt(3);
+    if(token_list[++tokenindex].type != identsym) printErrorAndHalt(IdentifierMissing);
+    if(lookupSymbol(token_list[tokenindex].name) != -1) printErrorAndHalt(SymbolPreviouslyDeclared);
     int tmp2 = tokenindex;
     tokenindex++;
 
-    if(token_list[tokenindex++].type != eqsym) printErrorAndHalt(4);
-    if(token_list[tokenindex].type != numbersym) printErrorAndHalt(5);
+    if(token_list[tokenindex++].type != eqsym) printErrorAndHalt(ConstNotAssigned);
+    if(token_list[tokenindex].type != numbersym) printErrorAndHalt(ConstNotAssignedInteger);
 
     insertConst(token_list[tokenindex].value, token_list[tmp2].name);
     tokenindex++;
   }
 
-  if(token_list[tokenindex++].type != semicolonsym) printErrorAndHalt(6);
+  if(token_list[tokenindex++].type != semicolonsym) printErrorAndHalt(ConstVarDeclarationsNoSemicolon);
 
 
 }
 
-int isVarDecl()
+int parseVarDecl()
 {
   int numvars = 3;
   if(token_list[tokenindex++].type != varsym) {--tokenindex; return 0;}  
-  if(token_list[tokenindex].type != identsym) printErrorAndHalt(2);
-  if(lookupSymbol(token_list[tokenindex].name) != -1) printErrorAndHalt(3);
+  if(token_list[tokenindex].type != identsym) printErrorAndHalt(IdentifierMissing);
+  if(lookupSymbol(token_list[tokenindex].name) != -1) printErrorAndHalt(SymbolPreviouslyDeclared);
   insertVar( numvars++, token_list[tokenindex].name);
   tokenindex++;
 
@@ -437,15 +490,34 @@ int isVarDecl()
   while(token_list[tokenindex].type == commasym)
   {
     tokenindex++;
-    if(token_list[tokenindex].type != identsym) printErrorAndHalt(2);
-    if(lookupSymbol(token_list[tokenindex].name) != -1) printErrorAndHalt(3);
+    if(token_list[tokenindex].type != identsym) printErrorAndHalt(IdentifierMissing);
+    if(lookupSymbol(token_list[tokenindex].name) != -1) printErrorAndHalt(SymbolPreviouslyDeclared);
     insertVar(numvars++, token_list[tokenindex].name);
     tokenindex++;
   }
 
   //;
-  if(token_list[tokenindex++].type != semicolonsym) printErrorAndHalt(6);
-  return numvars - 3;
+  if(token_list[tokenindex++].type != semicolonsym) printErrorAndHalt(ConstVarDeclarationsNoSemicolon);
+  return numvars;
+}
+
+void parseProcDecl()
+{
+  while(token_list[tokenindex].type == procsym)
+  {
+    ++tokenindex;
+    if(token_list[tokenindex].type != identsym) printErrorAndHalt(IdentifierMissing);//insert error
+    if(lookupSymbol(token_list[tokenindex].name) != -1) printErrorAndHalt(SymbolPreviouslyDeclared);//insert error
+    insertProc(linenumber*3, token_list[tokenindex].name);
+    ++tokenindex;
+    
+    ++currentLevel;
+    if(token_list[tokenindex++].type != semicolonsym) printErrorAndHalt(ProcDeclarationNoSemicolon);//insert error
+    parseBlock();
+    if(token_list[tokenindex++].type != semicolonsym) printErrorAndHalt(ProcDeclarationNoSemicolon);//insert error
+    insertInstruction(OPR, RTN, linenumber++);  
+    --currentLevel;
+  }
 }
 
 void parseStatement()
@@ -456,11 +528,20 @@ void parseStatement()
     {
     --tokenindex;
     int symbolindex = lookupSymbol(token_list[tokenindex++].name); 
-    if(symbolindex == -1) printErrorAndHalt(7);
-    if(symbol_table[symbolindex].kind == 1) printErrorAndHalt(8);
-    if(token_list[tokenindex++].type != becomessym) printErrorAndHalt(9);
+    if(symbolindex == -1) printErrorAndHalt(UndeclaredIdentifier);
+    if(symbol_table[symbolindex].kind != Variable) printErrorAndHalt(NonVarAltered);
+    if(token_list[tokenindex++].type != becomessym) printErrorAndHalt(WrongAssignmentSymbol);
     parseExpression();
     insertInstruction(STO, symbol_table[symbolindex].addr, linenumber++);
+    }
+    break;
+
+    case callsym:
+    {
+      int symbolindex = lookupSymbol(token_list[tokenindex++].name);
+      if(symbolindex == -1) printErrorAndHalt(UndeclaredIdentifier);
+      if(symbol_table[symbolindex].kind != Procedure) printErrorAndHalt(CallOnNonProc);//insert error
+      insertInstruction(CAL, symbol_table[symbolindex].addr, linenumber++);
     }
     break;
 
@@ -472,21 +553,21 @@ void parseStatement()
       tokenindex++;
       parseStatement();
     }
-    if(token_list[tokenindex++].type != endsym) printErrorAndHalt(10);
+    if(token_list[tokenindex++].type != endsym) printErrorAndHalt(BeginNoEnd);
     break;
-
 
     case ifsym:
     {
     parseCondition();
-    if(token_list[tokenindex++].type != thensym) printErrorAndHalt(11);
-    int tmp = linenumber;
-    linenumber++;
+    if(token_list[tokenindex++].type != thensym) printErrorAndHalt(IfNoThen);
+    int tmp = linenumber++;
     parseStatement();
     insertInstruction(JPC, (linenumber)*3, tmp);
-
-    //no error code is given for this, custom one made
-    if(token_list[tokenindex++].type != fisym) printErrorAndHalt(17);
+    int tmp2 = linenumber++;
+    if(token_list[tokenindex++].type != elsesym) printErrorAndHalt(IfNoElse);
+    parseStatement();
+    insertInstruction(JMP, (linenumber)*3, tmp2);
+    if(token_list[tokenindex++].type != fisym) printErrorAndHalt(ElseNoFi);
     }
     break;
 
@@ -496,7 +577,7 @@ void parseStatement()
     int precondition = linenumber;
     parseCondition();
     int postcondition = linenumber++;
-    if(token_list[tokenindex++].type != dosym) printErrorAndHalt(12);
+    if(token_list[tokenindex++].type != dosym) printErrorAndHalt(WhileNoDo);
     parseStatement();
     insertInstruction(JMP, precondition*3, linenumber++);
     insertInstruction(JPC, linenumber*3, postcondition);
@@ -505,10 +586,9 @@ void parseStatement()
 
     case readsym:
     {
-    if(token_list[tokenindex].type != identsym) printErrorAndHalt(8);
     int symbolindex = lookupSymbol(token_list[tokenindex++].name); 
-    if(symbolindex == -1) printErrorAndHalt(7);
-    if(symbol_table[symbolindex].kind == 1) printErrorAndHalt(8);
+    if(symbolindex == -1) printErrorAndHalt(UndeclaredIdentifier);
+    if(symbol_table[symbolindex].kind != Variable) printErrorAndHalt(NonVarAltered);
 
     insertInstruction(SYS, 2, linenumber++);
     insertInstruction(STO, symbol_table[symbolindex].addr, linenumber++);
@@ -516,7 +596,6 @@ void parseStatement()
     break;
     
     case writesym:
-    
     parseExpression();
     insertInstruction(SYS, 1, linenumber++);
     break;
@@ -558,7 +637,7 @@ void parseCondition()
       comparisonopr = GEQ; break;
 
     default:
-    printErrorAndHalt(13);
+    printErrorAndHalt(NoComparison);
     break;
     }
 
@@ -610,9 +689,9 @@ void parseFactor()
     case identsym:
     {
       int symbolindex = lookupSymbol(token_list[tokenindex++].name); 
-      if(symbolindex == -1) printErrorAndHalt(7);
+      if(symbolindex == -1) printErrorAndHalt(UndeclaredIdentifier);
 
-      if(symbol_table[symbolindex].kind == 2) // var
+      if(symbol_table[symbolindex].kind == Variable)
         insertInstruction(LOD, symbol_table[symbolindex].addr, linenumber++);
       else // const
         insertInstruction(LIT, symbol_table[symbolindex].val, linenumber++);
@@ -631,7 +710,7 @@ void parseFactor()
     break;
 
     default:
-    printErrorAndHalt(15);
+    printErrorAndHalt(ArithmeticOperationIncomplete);
     break;
   }
 
@@ -690,7 +769,7 @@ int main()
 
     printf("%4d | %11s | %5d | %5d | %7d | %4d\n", s.kind, s.name, s.val, s.level, s.addr, s.mark);
   }
-  /*----- Print To Filee and Console -----*/
+  /*----- Print To File and Console -----*/
 
 
 

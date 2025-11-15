@@ -1,7 +1,10 @@
-var x, y;
+var a, b;
+procedure x;
+  var q, w;
+  begin
+    q := 1;
+  end;
 begin
-  if y <> x then
-    write y
-  fi;
-  write x + 1;
+  a := 2;
+  call x;
 end.

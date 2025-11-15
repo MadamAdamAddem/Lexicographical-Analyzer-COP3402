@@ -1,5 +1,5 @@
 all:
-	gcc lex.c -o lex && gcc parsercodegen.c -o pcg && gcc vm.c -o vm
+	gcc lex.c -o lex && gcc parsercodegen_complete.c -o pcg && gcc vm.c -o vm
 
 run:
 	./lex input.txt && ./pcg && ./vm
